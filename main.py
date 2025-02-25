@@ -49,11 +49,6 @@ def main():
     combined.columns = ['SHEL', 'VLO']
     spread = combined['SHEL'] - combined['VLO']
 
-    # Imprimir algunos valores del spread para verificar
-    print("\nSpread (primeros 5 valores):")
-    print(spread.head())
-    print("Spread - Media:", spread.mean(), "Std:", spread.std())
-
     # 8. Normalizar (estandarizar) el spread usando Z-Score
     spread_normalized = (spread - spread.mean()) / spread.std()
     print("Spread Normalizado - Media:", spread_normalized.mean(), "Std:", spread_normalized.std())
@@ -62,6 +57,9 @@ def main():
     plt.figure(figsize=(12, 6))
     plt.plot(spread_normalized.index, spread_normalized, label='Spread Normalizado (Z-Score)', color='purple')
     plt.axhline(0, color='red', linestyle='--', label='Media = 0')
+    plt.axhline(1.50, color='blue', linestyle='--', label='1.50 Sigma')
+    plt.axhline(-1.50, color='blue', linestyle='--')
+
     plt.title("Spread Normalizado (Z-Score) entre SHEL y VLO (10 años)")
     plt.xlabel("Fecha")
     plt.ylabel("Spread (Z-Score)")
@@ -71,3 +69,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
