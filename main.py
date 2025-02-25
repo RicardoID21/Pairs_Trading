@@ -6,8 +6,9 @@ from functions import (
     engle_granger_cointegration_test,
     plot_etfs
 )
-import pandas as pd
 
+import pandas as pd
+import matplotlib.pyplot as plt
 def main():
     # 1. Descarga de datos (10 años) para SHEL y VLO
     data_shel = download_data('SHEL', period='10y')
@@ -35,17 +36,38 @@ def main():
         name1="SHEL_Log",
         name2="VLO_Log"
     )
+    # 6. Normalización Min-Max para que ambas series comiencen en el mismo nivel (0 a 100) usando los 10 años
+    norm_shel = (log_data_shel - log_data_shel.min()) / (log_data_shel.max() - log_data_shel.min()) * 100
+    norm_vlo = (log_data_vlo - log_data_vlo.min()) / (log_data_vlo.max() - log_data_vlo.min()) * 100
 
-    # 6. Filtrar para graficar solo los últimos 5 años
-    last5_shel = log_data_shel.loc[log_data_shel.index >= (log_data_shel.index.max() - pd.DateOffset(years=5))]
-    last5_vlo = log_data_vlo.loc[log_data_vlo.index >= (log_data_vlo.index.max() - pd.DateOffset(years=5))]
+    print("\nGenerando gráfico escalado (normalizado) de precios logarítmicos (últimos 10 años):")
+    plot_etfs(norm_shel, norm_vlo, "SHEL Normalizado", "VLO Normalizado",
+              title="Comparación normalizada (Min-Max): SHEL vs VLO (10 años)")
 
-    # 7. Normalizar las series para que ambas comiencen en el mismo nivel (por ejemplo, 100)
-    norm_last5_shel = (last5_shel - last5_shel.min()) / (last5_shel.max() - last5_shel.min()) * 100
-    norm_last5_vlo = (last5_vlo - last5_vlo.min()) / (last5_vlo.max() - last5_vlo.min()) * 100
+    # 7. Alinear las series normalizadas y calcular el spread
+    combined = pd.concat([norm_shel, norm_vlo], axis=1, join='inner')
+    combined.columns = ['SHEL', 'VLO']
+    spread = combined['SHEL'] - combined['VLO']
 
-    print("\nGenerando gráfico escalado (normalizado) de precios logarítmicos (últimos 5 años):")
-    plot_etfs(norm_last5_shel, norm_last5_vlo, "SHEL Normalizado", "VLO Normalizado", title="Comparación escalada: SHEL vs VLO (últimos 5 años)")
+    # Imprimir algunos valores del spread para verificar
+    print("\nSpread (primeros 5 valores):")
+    print(spread.head())
+    print("Spread - Media:", spread.mean(), "Std:", spread.std())
+
+    # 8. Normalizar (estandarizar) el spread usando Z-Score
+    spread_normalized = (spread - spread.mean()) / spread.std()
+    print("Spread Normalizado - Media:", spread_normalized.mean(), "Std:", spread_normalized.std())
+
+    # 9. Graficar el spread normalizado
+    plt.figure(figsize=(12, 6))
+    plt.plot(spread_normalized.index, spread_normalized, label='Spread Normalizado (Z-Score)', color='purple')
+    plt.axhline(0, color='red', linestyle='--', label='Media = 0')
+    plt.title("Spread Normalizado (Z-Score) entre SHEL y VLO (10 años)")
+    plt.xlabel("Fecha")
+    plt.ylabel("Spread (Z-Score)")
+    plt.legend()
+    plt.grid(True)
+    plt.show()
 
 if __name__ == "__main__":
     main()
