@@ -6,7 +6,6 @@ from functions import (
     engle_granger_cointegration_test,
     plot_etfs
 )
-from OLS import ols_regression_and_plot
 
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -68,11 +67,9 @@ def main():
     plt.grid(True)
     plt.show()
 
-    print("\n--- Regresión OLS: SHEL_Log ~ VLO_Log ---")
-    ols_regression_and_plot(log_data_shel, log_data_vlo, dep_label="SHEL_Log", indep_label="VLO_Log")
-
 if __name__ == "__main__":
     main()
+
 
 
 

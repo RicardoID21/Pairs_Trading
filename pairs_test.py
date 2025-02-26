@@ -116,9 +116,9 @@ def main():
     En la función main definimos los pares que queremos analizar.
     """
     pares = [
-        ("^GSPC", "NDAQ"),  # Ejemplo de par con alta correlación y posible cointegración
-        ("LLY", "JNJ"),  # Visa y Mastercard
-        ("RTX", "OSK"),  # Coca-Cola y Pepsi
+        ("GC=F", "SI=F"),  # Ejemplo de par con alta correlación y posible cointegración
+        ("LLY", "BAESY"),  # Visa y Mastercard
+        ("AVGO", "IBM"),  # Coca-Cola y Pepsi
         ("SHEL", "VLO"),  # ExxonMobil y Chevron
         ("META", "MSFT")  # ETFs tecnológicos
     ]
