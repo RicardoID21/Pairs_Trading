@@ -4,6 +4,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import statsmodels.api as sm
 from statsmodels.tsa.stattools import adfuller
+from statsmodels.tsa.vector_ar.vecm import coint_johansen
 
 
 def download_data(ticker: str, period: str = '10y'):
@@ -105,3 +106,28 @@ def plot_etfs(series1, series2, label1: str, label2: str, title="Comparación de
     plt.legend()
     plt.grid(True)
     plt.show()
+
+
+def johansen_cointegration_test(df, det_order=0, k_ar_diff=1):
+    """
+    Realiza el test de cointegración de Johansen sobre el DataFrame df,
+    que contiene las series (en columnas) a analizar.
+
+    Parámetros:
+      - df: DataFrame con las series en columnas.
+      - det_order: Orden del determinista (0 para sin tendencia).
+      - k_ar_diff: Número de diferencias a usar en el test.
+
+    Imprime y retorna el objeto resultado del test.
+    """
+    result = coint_johansen(df, det_order, k_ar_diff)
+    print("\n--- Test de Johansen ---")
+    print("Eigenvalues:")
+    print(result.eig)
+    print("\nEigenvectors:")
+    print(result.evec)
+    print("\nEstadísticos de Rastreo (Trace):")
+    print(result.lr1)
+    print("\nValores críticos:")
+    print(result.cvt)
+    return result
