@@ -9,7 +9,9 @@ from functions import (
     engle_granger_cointegration_test,
     plot_etfs,
     johansen_cointegration_test,
-    ols_regression_and_plot
+    ols_regression_and_plot,
+    run_kalman_filter,
+    generate_vecm_signals
 )
 
 def main():
@@ -122,6 +124,69 @@ def main():
 
     plt.tight_layout()
     plt.show()
+
+
+    kalman_df = run_kalman_filter(log_data_shel, log_data_vlo)
+    # kalman_df tiene columns: ['alpha', 'beta', 'pred_y']
+
+    # Graficar la evolución de alpha y beta
+    plt.figure(figsize=(12, 6))
+    plt.plot(kalman_df.index, kalman_df['alpha'], label='Alpha (Kalman)', color='red')
+    plt.plot(kalman_df.index, kalman_df['beta'], label='Beta (Kalman)', color='blue')
+    plt.title("Kalman Filter: Evolución de alpha y beta")
+    plt.xlabel("Fecha")
+    plt.ylabel("Valor")
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+    # Graficar la predicción vs. y real
+    # (Opcional) Comparamos kalman_df['pred_y'] con log_data_vlo
+    df_compare = pd.concat([log_data_vlo, kalman_df['pred_y']], axis=1).dropna()
+    df_compare.columns = ['VLO_log', 'pred_y']
+
+    plt.figure(figsize=(12, 6))
+    plt.plot(df_compare.index, df_compare['VLO_log'], label='VLO (log)', color='yellow')
+    plt.plot(df_compare.index, df_compare['pred_y'], label='Predicción Kalman', color='red', alpha=0.7)
+    plt.title("Kalman Filter: Comparación Y real vs. Y predicha")
+    plt.xlabel("Fecha")
+    plt.ylabel("Log(Precio)")
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+
+    df_signals, vecm_res = generate_vecm_signals(log_data_shel, log_data_vlo)
+
+    # Inspect the signals
+    print(df_signals.head(10))
+
+    # Plot the ECT with signals
+    plt.figure(figsize=(12,6))
+    plt.plot(df_signals.index, df_signals['ECT'], label='ECT', color='purple')
+    # Mark up/down lines
+    ect_mean = df_signals['ECT'].mean()
+    ect_std = df_signals['ECT'].std()
+    up_line = ect_mean + 1.5*ect_std
+    down_line = ect_mean - 1.5*ect_std
+
+    plt.axhline(up_line, color='blue', linestyle='--', label='Upper Threshold')
+    plt.axhline(down_line, color='blue', linestyle='--', label='Lower Threshold')
+    plt.axhline(ect_mean, color='red', linestyle='--', label='ECT Mean')
+
+    # Mark signals on the ECT line
+    short_signals = df_signals[df_signals['signal'] == -1]
+    long_signals = df_signals[df_signals['signal'] == 1]
+
+    plt.scatter(short_signals.index, short_signals['ECT'], marker='v', color='red', s=100, label='Short Spread')
+    plt.scatter(long_signals.index, long_signals['ECT'], marker='^', color='green', s=100, label='Long Spread')
+
+    plt.title("VECM: ECT & Trading Signals")
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+
 
 if __name__ == "__main__":
     main()

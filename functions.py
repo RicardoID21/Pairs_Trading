@@ -4,7 +4,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import statsmodels.api as sm
 from statsmodels.tsa.stattools import adfuller
-from statsmodels.tsa.vector_ar.vecm import coint_johansen
+from statsmodels.tsa.vector_ar.vecm import coint_johansen, VECM
 
 
 def download_data(ticker: str, period: str = '10y'):
@@ -132,9 +132,7 @@ def johansen_cointegration_test(df, det_order=0, k_ar_diff=1):
     print(result.cvt)
     return result
 
-import statsmodels.api as sm
-import matplotlib.pyplot as plt
-import pandas as pd
+
 
 
 def ols_regression_and_plot(series_dep, series_indep, dep_label="Y", indep_label="X"):
@@ -161,3 +159,168 @@ def ols_regression_and_plot(series_dep, series_indep, dep_label="Y", indep_label
     model = sm.OLS(y, X_const).fit()
     print(model.summary())
 
+class KalmanFilterReg:
+    def __init__(self):
+        # Estado inicial (alpha=1, beta=1 por defecto)
+        self.x = np.array([1.0, 1.0])
+        self.A = np.eye(2)                # Matriz de transición
+        self.Q = np.eye(2) * 0.1          # Covarianza del estado
+        self.R = np.array([[1]]) * 0.001  # Covarianza del error en la observación
+        self.P = np.eye(2) * 10           # Covarianza inicial del estado
+
+    def predict(self):
+        # Propagación de la incertidumbre
+        self.P = self.A @ self.P @ self.A.T + self.Q
+
+    def update(self, x_val, y_val):
+        """
+        Observación: y_val = alpha + beta * x_val
+        """
+        C = np.array([[1, x_val]])  # Matriz de observación (1x2)
+        S = C @ self.P @ C.T + self.R
+        K = self.P @ C.T @ np.linalg.inv(S)  # Ganancia de Kalman
+
+        y_pred = C @ self.x                # Predicción de la observación
+        resid = y_val - y_pred            # Residuo
+
+        # Actualizar estado (alpha, beta)
+        self.x = self.x + K.ravel() * resid
+        # Actualizar covarianza
+        self.P = (np.eye(2) - K @ C) @ self.P
+
+
+def run_kalman_filter(log_x, log_y):
+    """
+    Aplica el filtro de Kalman en modo rolling para estimar alpha, beta y la predicción de y en cada paso.
+    log_x: Serie (SHEL log)
+    log_y: Serie (VLO log)
+    Retorna: DataFrame con columnas ['alpha', 'beta', 'pred_y'] indexado por fecha.
+    """
+    # Alinear y limpiar
+    df = pd.concat([log_x, log_y], axis=1).dropna()
+    df.columns = ['x', 'y']
+
+    # Inicializar el filtro
+    kf = KalmanFilterReg()
+
+    alphas = []
+    betas = []
+    preds = []   # Aquí guardaremos la predicción: alpha + beta * x
+
+    # Iterar sobre las observaciones en orden temporal
+    for date, row in df.iterrows():
+        x_ = row['x']
+        y_ = row['y']
+
+        kf.predict()
+        kf.update(x_, y_)
+
+        # Extraer alpha, beta del estado
+        alpha, beta = kf.x
+        alphas.append(alpha)
+        betas.append(beta)
+        # Predicción: alpha + beta * x
+        preds.append(alpha + beta * x_)
+
+    # Construir el resultado
+    out = pd.DataFrame({
+        'alpha': alphas,
+        'beta': betas,
+        'pred_y': preds
+    }, index=df.index)
+
+    return out
+
+
+
+def generate_vecm_signals(log_data_shel, log_data_vlo, det_order=0, k_ar_diff=1, threshold_sigma=1.5):
+    """
+    1) Runs Johansen test to find cointegration rank.
+    2) Fits a VECM with that rank.
+    3) Obtains the Error Correction Term (ECT).
+    4) Generates trading signals based on ±threshold_sigma * std(ECT).
+
+    Returns:
+      - df_signals: DataFrame with columns [ECT, signal], indexed by date.
+      - vecm_res: The fitted VECM model object (for further inspection).
+    """
+
+    # Combine log data in a DataFrame, align by date
+    df = pd.concat([log_data_shel, log_data_vlo], axis=1).dropna()
+    df.columns = ['SHEL_Log', 'VLO_Log']
+
+    # 1) Johansen test
+    joh_res = coint_johansen(df, det_order, k_ar_diff)
+    # Suppose you see from the trace stats that rank=1 is appropriate
+    # (Check joh_res.lr1, joh_res.cvt to confirm)
+    rank = 1
+
+    # 2) Fit a VECM
+    # deterministic='co' => constant inside cointegration relation
+    model = VECM(df, deterministic='co', k_ar_diff=k_ar_diff, coint_rank=rank)
+    vecm_res = model.fit()
+
+    # 3) Obtain ECT: The error correction term from the fitted model.
+    # Statsmodels provides .plot(), .resid, etc. But for the ECT, we can compute:
+    # ECT[t] = beta^T * y[t-1] if rank=1 => single cointegrating relationship.
+    # Alternatively, statsmodels >= 0.12 has 'vecm_res.ec_term' or we do it manually:
+
+    # For a single cointegrating vector:
+    beta = vecm_res.beta  # shape (2, rank=1) => we’ll flatten it
+    beta = beta[:, 0]     # e.g. [beta_shel, beta_vlo]
+
+    # If the model also includes a deterministic constant in cointegration,
+    # it appears in the last row of `vecm_res.beta`. For a 2D system + constant,
+    # shape might be (3,1). Adjust accordingly.
+    # If you see something like beta.shape = (3,1), then the last element is the constant.
+
+    # We'll check if there's a constant inside beta:
+    # (If deterministic='co', row -1 might be the constant)
+    has_const = (beta.shape[0] == 3)  # means [SHEL_Log, VLO_Log, const]
+    if has_const:
+        coint_const = beta[-1]
+        beta_assets = beta[:-1]
+    else:
+        coint_const = 0.0
+        beta_assets = beta
+
+    # Now we compute ECT for each time t from the data
+    # ECT[t] = beta_assets^T * y[t] + coint_const
+    # But note: VECM uses y[t-1], so we shift the data by 1.
+    # We'll do it in a simple approach:
+    df_shift = df.shift(1).dropna()
+    ect_values = []
+    for i in range(len(df_shift)):
+        row = df_shift.iloc[i]
+        # y[t-1] = [SHEL_Log, VLO_Log]
+        val = beta_assets[0]*row['SHEL_Log'] + beta_assets[1]*row['VLO_Log'] + coint_const
+        ect_values.append(val)
+
+    # Align ECT with the same index (shifted by 1)
+    ect_series = pd.Series(ect_values, index=df_shift.index, name='ECT')
+
+    # 4) Generate signals: ± threshold_sigma * std(ECT)
+    # We can center ECT at its mean, or just rely on raw ECT. Here we do raw.
+    ect_mean = ect_series.mean()
+    ect_std = ect_series.std()
+    up = ect_mean + threshold_sigma * ect_std
+    down = ect_mean - threshold_sigma * ect_std
+
+    # if ECT > up => short spread
+    # if ECT < down => long spread
+    # else => no signal (0)
+    signals = []
+    for val in ect_series:
+        if val > up:
+            signals.append(-1)  # short
+        elif val < down:
+            signals.append(1)   # long
+        else:
+            signals.append(0)
+
+    df_signals = pd.DataFrame({
+        'ECT': ect_series,
+        'signal': signals
+    }, index=ect_series.index)
+
+    return df_signals, vecm_res
