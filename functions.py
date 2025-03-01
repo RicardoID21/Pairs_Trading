@@ -9,7 +9,7 @@ from statsmodels.tsa.vector_ar.vecm import coint_johansen, VECM
 
 def download_data(ticker: str, period: str = '10y'):
     """
-    Descarga el precio ajustado de un ticker para el período especificado.
+    Descarga el precio ajustado de un ticker para el periodo especificado.
     Si no se encuentra la columna 'Adj Close', utiliza 'Close'.
     """
     data = yf.download(ticker, period=period)
@@ -133,8 +133,6 @@ def johansen_cointegration_test(df, det_order=0, k_ar_diff=1):
     return result
 
 
-
-
 def ols_regression_and_plot(series_dep, series_indep, dep_label="Y", indep_label="X"):
     """
     Realiza una regresión OLS de la serie dependiente (dep) sobre la serie independiente (indep)
@@ -159,14 +157,15 @@ def ols_regression_and_plot(series_dep, series_indep, dep_label="Y", indep_label
     model = sm.OLS(y, X_const).fit()
     print(model.summary())
 
+
 class KalmanFilterReg:
     def __init__(self):
         # Estado inicial (alpha=1, beta=1 por defecto)
-        self.x = np.array([1.0, 1.0])
-        self.A = np.eye(2)                # Matriz de transición
-        self.Q = np.eye(2) * 0.01          # Covarianza del estado
-        self.R = np.array([[1]]) * 10 # Covarianza del error en la observación
-        self.P = np.eye(2) * 10           # Covarianza inicial del estado
+        self.x = np.array([1.0, 1.0])  # Estado: [alpha, beta]
+        self.A = np.eye(2)  # Matriz de transición (identidad para mantener alpha y beta constantes)
+        self.Q = np.eye(2) * 0.1  # Covarianza del estado (ruido en el estado)
+        self.R = np.array([[1]]) * 0.001  # Covarianza del error en la observación
+        self.P = np.eye(2) * 10  # Covarianza inicial del estado
 
     def predict(self):
         # Propagación de la incertidumbre
@@ -180,8 +179,8 @@ class KalmanFilterReg:
         S = C @ self.P @ C.T + self.R
         K = self.P @ C.T @ np.linalg.inv(S)  # Ganancia de Kalman
 
-        y_pred = C @ self.x                # Predicción de la observación
-        resid = y_val - y_pred            # Residuo
+        y_pred = C @ self.x  # Predicción de la observación
+        resid = y_val - y_pred  # Residuo
 
         # Actualizar estado (alpha, beta)
         self.x = self.x + K.ravel() * resid
@@ -198,14 +197,14 @@ def run_kalman_filter(log_x, log_y):
     """
     # Alinear y limpiar
     df = pd.concat([log_x, log_y], axis=1).dropna()
-    df.columns = ['x', 'y']
+    df.columns = ['x', 'y']  # Asegurarse de que las columnas tengan nombres explícitos
 
     # Inicializar el filtro
     kf = KalmanFilterReg()
 
     alphas = []
     betas = []
-    preds = []   # Aquí guardaremos la predicción: alpha + beta * x
+    preds = []  # Aquí guardaremos la predicción: alpha + beta * x
 
     # Iterar sobre las observaciones en orden temporal
     for date, row in df.iterrows():
@@ -230,7 +229,6 @@ def run_kalman_filter(log_x, log_y):
     }, index=df.index)
 
     return out
-
 
 
 def generate_vecm_signals(log_data_shel, log_data_vlo, det_order=0, k_ar_diff=1, threshold_sigma=1.5):
@@ -267,13 +265,11 @@ def generate_vecm_signals(log_data_shel, log_data_vlo, det_order=0, k_ar_diff=1,
 
     # For a single cointegrating vector:
     beta = vecm_res.beta  # shape (2, rank=1) => we’ll flatten it
-    beta = beta[:, 0]     # e.g. [beta_shel, beta_vlo]
+    beta = beta[:, 0]  # e.g. [beta_shel, beta_vlo]
 
     # If the model also includes a deterministic constant in cointegration,
-    # it appears in the last row of `vecm_res.beta`. For a 2D system + constant,
+    # it appears in the last row of vecm_res.beta. For a 2D system + constant,
     # shape might be (3,1). Adjust accordingly.
-    # If you see something like beta.shape = (3,1), then the last element is the constant.
-
     # We'll check if there's a constant inside beta:
     # (If deterministic='co', row -1 might be the constant)
     has_const = (beta.shape[0] == 3)  # means [SHEL_Log, VLO_Log, const]
@@ -293,7 +289,7 @@ def generate_vecm_signals(log_data_shel, log_data_vlo, det_order=0, k_ar_diff=1,
     for i in range(len(df_shift)):
         row = df_shift.iloc[i]
         # y[t-1] = [SHEL_Log, VLO_Log]
-        val = beta_assets[0]*row['SHEL_Log'] + beta_assets[1]*row['VLO_Log'] + coint_const
+        val = beta_assets[0] * row['SHEL_Log'] + beta_assets[1] * row['VLO_Log'] + coint_const
         ect_values.append(val)
 
     # Align ECT with the same index (shifted by 1)
@@ -314,7 +310,7 @@ def generate_vecm_signals(log_data_shel, log_data_vlo, det_order=0, k_ar_diff=1,
         if val > up:
             signals.append(-1)  # short
         elif val < down:
-            signals.append(1)   # long
+            signals.append(1)  # long
         else:
             signals.append(0)
 
@@ -324,4 +320,129 @@ def generate_vecm_signals(log_data_shel, log_data_vlo, det_order=0, k_ar_diff=1,
     }, index=ect_series.index)
 
     return df_signals, vecm_res
+
+
+def backtest_vecm_strategy(data, df_signals, capital_init=1_000_000, commission=0.125 / 100, margin_req=0.5,
+                           profit_threshold=0.15, stop_loss=0.1):
+    """
+    Backtest de la estrategia de pairs trading para SHEL y VLO usando señales de VECM,
+    operando "all in" (usando el máximo número de acciones que permite el capital disponible)
+    y considerando cuenta de margen, con condiciones de cierre por:
+      - Margin call: si capital + trade_value < 0.
+      - Take-Profit: si la ganancia >= profit_threshold * trade_cost.
+      - Stop-Loss: si la pérdida <= -stop_loss * trade_cost.
+      - Cambio de señal (o señal 0).
+
+    Retorna:
+      - portfolio_series: Serie de la evolución del valor total del portafolio.
+      - trades: Lista de diccionarios con el log de cada operación.
+    """
+    capital = capital_init
+    active_trade = None
+    portfolio_value = []
+    trades = []
+
+    for date, row in data.iterrows():
+        # Obtener la señal del día (si existe, sino 0)
+        signal = df_signals.loc[date, 'signal'] if date in df_signals.index else 0
+
+        if active_trade is None:
+            if signal in [-1, 1]:
+                entry_SHEL = row['SHEL']
+                entry_VLO = row['VLO']
+                if signal == -1:
+                    cost_long_per_share = entry_VLO * (1 + commission)
+                    cost_short_per_share = entry_SHEL * margin_req
+                else:
+                    cost_long_per_share = entry_SHEL * (1 + commission)
+                    cost_short_per_share = entry_VLO * margin_req
+                total_cost_per_share = cost_long_per_share + cost_short_per_share
+                n_shares = int(np.floor(capital / total_cost_per_share))
+                if n_shares <= 0:
+                    active_trade = None
+                else:
+                    trade_cost = n_shares * total_cost_per_share
+                    capital -= trade_cost
+                    active_trade = {
+                        'open_date': date,
+                        'signal': signal,
+                        'entry_SHEL': entry_SHEL,
+                        'entry_VLO': entry_VLO,
+                        'n_shares': n_shares,
+                        'trade_cost': trade_cost
+                    }
+                    trades.append({
+                        'open_date': date,
+                        'close_date': None,
+                        'signal': signal,
+                        'entry_SHEL': entry_SHEL,
+                        'entry_VLO': entry_VLO,
+                        'exit_SHEL': None,
+                        'exit_VLO': None,
+                        'n_shares': n_shares,
+                        'pnl': None,
+                        'close_reason': None
+                    })
+        else:
+            n_shares = active_trade['n_shares']
+            if active_trade['signal'] == -1:
+                current_value_SHEL = n_shares * (active_trade['entry_SHEL'] - row['SHEL'])
+                current_value_VLO = n_shares * (row['VLO'] - active_trade['entry_VLO'])
+            else:
+                current_value_SHEL = n_shares * (row['SHEL'] - active_trade['entry_SHEL'])
+                current_value_VLO = n_shares * (active_trade['entry_VLO'] - row['VLO'])
+            trade_value = current_value_SHEL + current_value_VLO
+
+            # Condición 1: Margin Call (evitar capital negativo)
+            if capital + trade_value < 0:
+                close_reason = 'margin_call'
+            # Condición 2: Take-Profit
+            elif trade_value >= profit_threshold * active_trade['trade_cost']:
+                close_reason = 'take_profit'
+            # Condición 3: Stop-Loss
+            elif trade_value <= -stop_loss * active_trade['trade_cost']:
+                close_reason = 'stop_loss'
+            # Condición 4: Cambio de señal o señal 0
+            elif signal == 0 or signal != active_trade['signal']:
+                close_reason = 'signal_change'
+            else:
+                close_reason = None
+
+            if close_reason is not None:
+                if active_trade['signal'] == -1:
+                    pnl_SHEL = (active_trade['entry_SHEL'] - row['SHEL']) * n_shares
+                    pnl_VLO = (row['VLO'] - active_trade['entry_VLO']) * n_shares
+                else:
+                    pnl_SHEL = (row['SHEL'] - active_trade['entry_SHEL']) * n_shares
+                    pnl_VLO = (active_trade['entry_VLO'] - row['VLO']) * n_shares
+                commission_exit = (n_shares * row['SHEL'] + n_shares * row['VLO']) * commission
+                trade_pnl = pnl_SHEL + pnl_VLO - commission_exit
+                capital += active_trade['trade_cost'] + trade_pnl
+
+                last_trade = trades[-1]
+                if last_trade['close_date'] is None:
+                    last_trade['close_date'] = date
+                    last_trade['exit_SHEL'] = row['SHEL']
+                    last_trade['exit_VLO'] = row['VLO']
+                    last_trade['pnl'] = trade_pnl
+                    last_trade['close_reason'] = close_reason
+                active_trade = None
+
+        if active_trade is not None:
+            n_shares = active_trade['n_shares']
+            if active_trade['signal'] == -1:
+                current_value_SHEL = n_shares * (active_trade['entry_SHEL'] - row['SHEL'])
+                current_value_VLO = n_shares * (row['VLO'] - active_trade['entry_VLO'])
+            else:
+                current_value_SHEL = n_shares * (row['SHEL'] - active_trade['entry_SHEL'])
+                current_value_VLO = n_shares * (active_trade['entry_VLO'] - row['VLO'])
+            trade_value = current_value_SHEL + current_value_VLO
+            total_value = capital + trade_value
+        else:
+            total_value = capital
+
+        portfolio_value.append(total_value)
+
+    portfolio_series = pd.Series(portfolio_value, index=data.index)
+    return portfolio_series, trades
 
