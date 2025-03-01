@@ -11,7 +11,8 @@ from functions import (
     johansen_cointegration_test,
     ols_regression_and_plot,
     run_kalman_filter,
-    generate_vecm_signals
+    generate_vecm_signals,
+    backtest_pairs_trading
 )
 
 def main():
@@ -129,17 +130,6 @@ def main():
     kalman_df = run_kalman_filter(log_data_shel, log_data_vlo)
     # kalman_df tiene columns: ['alpha', 'beta', 'pred_y']
 
-    # Graficar la evolución de alpha y beta
-    plt.figure(figsize=(12, 6))
-    plt.plot(kalman_df.index, kalman_df['alpha'], label='Alpha (Kalman)', color='red')
-    plt.plot(kalman_df.index, kalman_df['beta'], label='Beta (Kalman)', color='blue')
-    plt.title("Kalman Filter: Evolución de alpha y beta")
-    plt.xlabel("Fecha")
-    plt.ylabel("Valor")
-    plt.legend()
-    plt.grid(True)
-    plt.show()
-
     # Graficar la predicción vs. y real
     # (Opcional) Comparamos kalman_df['pred_y'] con log_data_vlo
     df_compare = pd.concat([log_data_vlo, kalman_df['pred_y']], axis=1).dropna()
@@ -177,15 +167,6 @@ def main():
     # Mark signals on the ECT line
     short_signals = df_signals[df_signals['signal'] == -1]
     long_signals = df_signals[df_signals['signal'] == 1]
-
-    plt.scatter(short_signals.index, short_signals['ECT'], marker='v', color='red', s=100, label='Short Spread')
-    plt.scatter(long_signals.index, long_signals['ECT'], marker='^', color='green', s=100, label='Long Spread')
-
-    plt.title("VECM: ECT & Trading Signals")
-    plt.legend()
-    plt.grid(True)
-    plt.show()
-
 
 
 if __name__ == "__main__":

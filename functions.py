@@ -164,8 +164,8 @@ class KalmanFilterReg:
         # Estado inicial (alpha=1, beta=1 por defecto)
         self.x = np.array([1.0, 1.0])
         self.A = np.eye(2)                # Matriz de transición
-        self.Q = np.eye(2) * 0.1          # Covarianza del estado
-        self.R = np.array([[1]]) * 0.001  # Covarianza del error en la observación
+        self.Q = np.eye(2) * 0.01          # Covarianza del estado
+        self.R = np.array([[1]]) * 10 # Covarianza del error en la observación
         self.P = np.eye(2) * 10           # Covarianza inicial del estado
 
     def predict(self):
@@ -324,3 +324,4 @@ def generate_vecm_signals(log_data_shel, log_data_vlo, det_order=0, k_ar_diff=1,
     }, index=ect_series.index)
 
     return df_signals, vecm_res
+
