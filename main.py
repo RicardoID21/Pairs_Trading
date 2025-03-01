@@ -13,49 +13,45 @@ from functions import (
     ols_regression_and_plot,
     run_kalman_filter,
     generate_vecm_signals,
-    backtest_vecm_strategy  # Nuestra función modificada de backtest
+    backtest_vecm_strategy  # Nuestra función de backtest modificada
 )
 
+
 def main():
-    # 1. Descargar datos (10 años) para SHEL y VLO
+    # 1. Descarga de datos (10 años) para SHEL y VLO
     data_shel = download_data('SHEL', period='10y')
     data_vlo = download_data('VLO', period='10y')
-
-    # Crear un DataFrame con columnas ["SHEL", "VLO"]
     data = pd.concat([data_shel, data_vlo], axis=1).dropna()
-    data.columns = ["SHEL", "VLO"]
+    data.columns = ['SHEL', 'VLO']
 
-    # 2. Transformar a logaritmos de precios (para análisis de cointegración)
-    log_data_shel = np.log(data_shel.dropna())
-    log_data_vlo = np.log(data_vlo.dropna())
+    # 2. Transformación logarítmica (para análisis de cointegración)
+    log_data_shel = np.log(data['SHEL'])
+    log_data_vlo = np.log(data['VLO'])
 
-    # 3. Ejecutar pruebas (ADF, correlación, cointegración)
-    print("\nPrueba ADF para SHEL (logarítmico):")
+    # 3. Ejecutar pruebas básicas
+    print("\nPrueba ADF para SHEL (log):")
     run_adf_test(log_data_shel, "SHEL Log")
-    print("\nPrueba ADF para VLO (logarítmico):")
+    print("\nPrueba ADF para VLO (log):")
     run_adf_test(log_data_vlo, "VLO Log")
-    print("\nAnálisis de correlación (logarítmico) entre SHEL y VLO:")
-    correlation_analysis(log_data_shel, log_data_vlo, "SHEL Log", "VLO Log")
-    print("\nTest de Cointegración Engle-Granger (SHEL vs VLO, logarítmico):")
+    print("\nCorrelación entre SHEL y VLO (log):",
+          correlation_analysis(log_data_shel, log_data_vlo, "SHEL Log", "VLO Log"))
     engle_granger_cointegration_test(log_data_shel, log_data_vlo, name1="SHEL_Log", name2="VLO_Log")
     johansen_cointegration_test(pd.concat([log_data_shel, log_data_vlo], axis=1).dropna(), det_order=0, k_ar_diff=1)
 
-    # 4. Normalizar (Min-Max) ambas series para graficar en el subplot superior
+    # 4. Normalizar para graficar
     norm_shel = (log_data_shel - log_data_shel.min()) / (log_data_shel.max() - log_data_shel.min()) * 100
     norm_vlo = (log_data_vlo - log_data_vlo.min()) / (log_data_vlo.max() - log_data_vlo.min()) * 100
 
-    # 5. Calcular el spread (Johansen) usando el vector cointegrante
+    # 5. Calcular el spread (Johansen)
     combined_log = pd.concat([log_data_shel, log_data_vlo], axis=1, join='inner').sort_index()
     combined_log.columns = ["SHEL_Log", "VLO_Log"]
     spread_johansen = 7.98728502 * combined_log["SHEL_Log"] - 4.9034967 * combined_log["VLO_Log"]
     spread_centered = spread_johansen - spread_johansen.mean()
 
-    # 6. Definir umbrales ±1.5 std
     spread_std = spread_centered.std()
     threshold_up = 1.5 * spread_std
     threshold_down = -1.5 * spread_std
 
-    # 7. Identificar señales (basadas en spread estático)
     spread_df = spread_centered.to_frame(name='spread').sort_index()
     short_shel_long_vlo = spread_df[spread_df['spread'] > threshold_up]
     short_vlo_long_shel = spread_df[spread_df['spread'] < threshold_down]
@@ -63,11 +59,9 @@ def main():
     print("\n--- Regresión OLS: SHEL_Log ~ VLO_Log ---")
     ols_regression_and_plot(log_data_shel, log_data_vlo, dep_label="SHEL_Log", indep_label="VLO_Log")
 
-    # 8. Preparar DataFrame normalizado para el gráfico superior
     norm_df = pd.concat([norm_shel, norm_vlo], axis=1, join='inner').sort_index()
     norm_df.columns = ['SHEL_Norm', 'VLO_Norm']
 
-    # 9. Crear figura con 2 subplots para comparar activos y spread
     fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=(12, 8), gridspec_kw={'height_ratios': [3, 1]})
     ax1.plot(norm_df.index, norm_df['SHEL_Norm'], label="SHEL Normalizado", color='tab:blue')
     ax1.plot(norm_df.index, norm_df['VLO_Norm'], label="VLO Normalizado", color='tab:orange')
@@ -95,20 +89,12 @@ def main():
     ax2.set_ylabel("Spread")
     ax2.grid(True)
     ax2.legend(loc="best")
+
     plt.tight_layout()
     plt.show()
 
-    # 10. Kalman Filter: graficar evolución de alpha, beta y comparación de Y real vs. Y predicha
+    # 6. Kalman Filter
     kalman_df = run_kalman_filter(log_data_shel, log_data_vlo)
-    plt.figure(figsize=(12, 6))
-    plt.plot(kalman_df.index, kalman_df['alpha'], label='Alpha (Kalman)', color='red')
-    plt.plot(kalman_df.index, kalman_df['beta'], label='Beta (Kalman)', color='blue')
-    plt.title("Kalman Filter: Evolución de alpha y beta")
-    plt.xlabel("Fecha")
-    plt.ylabel("Valor")
-    plt.legend()
-    plt.grid(True)
-    plt.show()
 
     df_compare = pd.concat([log_data_vlo, kalman_df['pred_y']], axis=1).dropna()
     df_compare.columns = ['VLO_log', 'pred_y']
@@ -122,7 +108,7 @@ def main():
     plt.grid(True)
     plt.show()
 
-    # 11. Generar señales VECM y ejecutar backtest de la estrategia (nuestra función en functions)
+    # 7. Generar señales VECM y ejecutar backtest de la estrategia
     df_signals, vecm_res = generate_vecm_signals(log_data_shel, log_data_vlo)
     print("Señales generadas:")
     print(df_signals.head(10))
@@ -131,7 +117,7 @@ def main():
         data,
         df_signals,
         capital_init=1_000_000,
-        commission=0.125/100,
+        commission=0.125 / 100,
         margin_req=0.5,
         profit_threshold=0.15,
         stop_loss=0.1
@@ -144,7 +130,7 @@ def main():
     print("=== TRADES LOG with Cumulative PnL ===")
     print(df_trades)
 
-    plt.figure(figsize=(12,6))
+    plt.figure(figsize=(12, 6))
     plt.plot(portfolio_series.index, portfolio_series, label="Valor del Portafolio", color='green')
     plt.title("Evolución del Valor del Portafolio (Pairs Trading 'All In': SHEL y VLO)")
     plt.xlabel("Fecha")
@@ -154,6 +140,7 @@ def main():
     plt.show()
 
     return portfolio_series, df_trades
+
 
 if __name__ == "__main__":
     backtest_df, trades_df = main()
