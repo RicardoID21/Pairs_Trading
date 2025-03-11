@@ -192,145 +192,162 @@ def generate_vecm_signals(data_shel, data_vlo, det_order=0, k_ar_diff=1, thresho
     return df_signals, vecm_res
 
 
-def backtest_vecm_strategy(
-        data,
-        df_signals,
-        capital_init=1_000_000,
-        commission=0.125 / 100,
-        margin_req=0.5,
-        profit_threshold=0.15,
-        stop_loss=0.1
-):
+def backtest_strategy(hedge_df, trades, capital_init=1_000_000, commission=0.00125, margin_req=0.3, n_shares_shel=50):
     """
-    Backtest de la estrategia de pairs trading para SHEL y VLO usando señales de VECM,
-    operando "all in" y considerando cuenta de margen. Se cierra la posición cuando:
-      - Capital + valor de la posición < 0 (margin call),
-      - Ganancia >= profit_threshold * trade_cost (take-profit),
-      - Pérdida <= -stop_loss * trade_cost (stop-loss),
-      - O la señal cambia (o es 0).
+    Realiza un backtest de la estrategia de pairs trading.
+
+    Parámetros:
+    - hedge_df: DataFrame con columnas ['SHEL', 'VLO', 'Hedge_Ratio'] indexado por fecha.
+    - trades: Lista de operaciones con 'date', 'type', 'signal', 'spread', 'hedge_ratio'.
+    - capital_init: Capital inicial (default: 1,000,000).
+    - commission: Comisión por transacción (default: 0.125%).
+    - margin_req: Porcentaje de capital reservado como margen (default: 30%).
+    - n_shares_shel: Número de acciones de SHEL por operación (default: 50).
 
     Retorna:
-      - portfolio_series: Serie con la evolución del valor total del portafolio.
-      - trades: Lista de diccionarios con el log de cada operación.
+    - trade_log_df: DataFrame con el registro de operaciones.
+    - capital_history_df: DataFrame con el historial del capital.
     """
-    capital = capital_init
-    active_trade = None
-    portfolio_value = []
-    trades = []
+    capital = capital_init  # Capital inicial
+    trade_log = []  # Registro de operaciones
+    capital_history = []  # Historial del capital
+    cumulative_pnl = 0  # P&L acumulado
+    open_positions_with_details = []  # Rastrear posiciones abiertas con precios y cantidades
 
-    for date, row in data.iterrows():
-        signal = df_signals.loc[date, 'signal'] if date in df_signals.index else 0
+    for trade in trades:
+        date = trade['date']
+        trade_type = trade['type']
+        signal = trade['signal']
+        hedge_ratio = trade['hedge_ratio']
+        shel_price = hedge_df.loc[date, 'SHEL']
+        vlo_price = hedge_df.loc[date, 'VLO']
+        capital_available = capital * (1 - margin_req)  # Capital disponible para operar
 
-        if active_trade is None:
-            if signal in [-1, 1]:
-                entry_SHEL = row['SHEL']
-                entry_VLO = row['VLO']
-                if signal == -1:
-                    cost_long_per_share = entry_VLO * (1 + commission)
-                    cost_short_per_share = entry_SHEL * margin_req
-                else:
-                    cost_long_per_share = entry_SHEL * (1 + commission)
-                    cost_short_per_share = entry_VLO * margin_req
-                total_cost_per_share = cost_long_per_share + cost_short_per_share
-                n_shares = int(np.floor(capital / total_cost_per_share))
-                if n_shares > 0:
-                    trade_cost = n_shares * total_cost_per_share
-                    capital -= trade_cost
-                    active_trade = {
+        # Calcular número de acciones de VLO usando Hedge_Ratio
+        n_shares_vlo = int(n_shares_shel * hedge_ratio)
+
+        if trade_type == 'OPEN':
+            if signal == -1:  # LONG VLO, SHORT SHEL
+                # LONG VLO: Verificar capital para compra
+                vlo_cost = n_shares_vlo * vlo_price * (1 + commission)
+                shel_cost = n_shares_shel * shel_price * commission  # Solo costo de comisión para SHORT
+                if capital_available >= vlo_cost + shel_cost:
+                    # Ejecutar operación
+                    capital -= vlo_cost  # Restar costo de LONG VLO
+                    open_positions_with_details.append({
                         'open_date': date,
-                        'signal': signal,
-                        'entry_SHEL': entry_SHEL,
-                        'entry_VLO': entry_VLO,
-                        'n_shares': n_shares,
-                        'trade_cost': trade_cost
-                    }
-                    trades.append({
-                        'open_date': date,
-                        'close_date': None,
-                        'signal': signal,
-                        'entry_SHEL': entry_SHEL,
-                        'entry_VLO': entry_VLO,
-                        'exit_SHEL': None,
-                        'exit_VLO': None,
-                        'n_shares': n_shares,
-                        'pnl': None,
-                        'close_reason': None
+                        'signal': -1,
+                        'shel_shares': -n_shares_shel,  # SHORT SHEL
+                        'vlo_shares': n_shares_vlo,     # LONG VLO
+                        'shel_open_price': shel_price,
+                        'vlo_open_price': vlo_price,
+                        'shel_commission_open': n_shares_shel * shel_price * commission,
+                        'vlo_commission_open': n_shares_vlo * vlo_price * commission
                     })
-        else:
-            n_shares = active_trade['n_shares']
-            if active_trade['signal'] == -1:
-                current_value_SHEL = n_shares * (active_trade['entry_SHEL'] - row['SHEL'])
-                current_value_VLO = n_shares * (row['VLO'] - active_trade['entry_VLO'])
-            else:
-                current_value_SHEL = n_shares * (row['SHEL'] - active_trade['entry_SHEL'])
-                current_value_VLO = n_shares * (active_trade['entry_VLO'] - row['VLO'])
-            trade_value = current_value_SHEL + current_value_VLO
-
-            if capital + trade_value < 0:
-                close_reason = 'margin_call'
-            elif trade_value >= profit_threshold * active_trade['trade_cost']:
-                close_reason = 'take_profit'
-            elif trade_value <= -stop_loss * active_trade['trade_cost']:
-                close_reason = 'stop_loss'
-            elif signal == 0 or signal != active_trade['signal']:
-                close_reason = 'signal_change'
-            else:
-                close_reason = None
-
-            if close_reason is not None:
-                if active_trade['signal'] == -1:
-                    pnl_SHEL = (active_trade['entry_SHEL'] - row['SHEL']) * n_shares
-                    pnl_VLO = (row['VLO'] - active_trade['entry_VLO']) * n_shares
+                    trade_log.append({
+                        'Date': date,
+                        'Type': 'OPEN',
+                        'Signal': -1,
+                        'SHEL_Shares': -n_shares_shel,
+                        'VLO_Shares': n_shares_vlo,
+                        'SHEL_Price': shel_price,
+                        'VLO_Price': vlo_price,
+                        'P&L': 0,
+                        'Cumulative_P&L': cumulative_pnl,
+                        'Return (%)': (cumulative_pnl / capital_init) * 100,
+                        'Capital': capital
+                    })
                 else:
-                    pnl_SHEL = (row['SHEL'] - active_trade['entry_SHEL']) * n_shares
-                    pnl_VLO = (active_trade['entry_VLO'] - row['VLO']) * n_shares
-                commission_exit = (n_shares * row['SHEL'] + n_shares * row['VLO']) * commission
-                trade_pnl = pnl_SHEL + pnl_VLO - commission_exit
-                capital += active_trade['trade_cost'] + trade_pnl
-                last_trade = trades[-1]
-                if last_trade['close_date'] is None:
-                    last_trade['close_date'] = date
-                    last_trade['exit_SHEL'] = row['SHEL']
-                    last_trade['exit_VLO'] = row['VLO']
-                    last_trade['pnl'] = trade_pnl
-                    last_trade['close_reason'] = close_reason
-                active_trade = None
+                    print(f"No hay capital suficiente para abrir posición en {date}: Capital disponible = {capital_available:.2f}, Costo = {vlo_cost + shel_cost:.2f}")
+                    continue
 
-        if active_trade is not None:
-            n_shares = active_trade['n_shares']
-            if active_trade['signal'] == -1:
-                current_value_SHEL = n_shares * (active_trade['entry_SHEL'] - row['SHEL'])
-                current_value_VLO = n_shares * (row['VLO'] - active_trade['entry_VLO'])
-            else:
-                current_value_SHEL = n_shares * (row['SHEL'] - active_trade['entry_SHEL'])
-                current_value_VLO = n_shares * (active_trade['entry_VLO'] - row['VLO'])
-            trade_value = current_value_SHEL + current_value_VLO
-            total_value = capital + trade_value
-        else:
-            total_value = capital
+            elif signal == 1:  # LONG SHEL, SHORT VLO
+                # LONG SHEL: Verificar capital para compra
+                shel_cost = n_shares_shel * shel_price * (1 + commission)
+                vlo_cost = n_shares_vlo * vlo_price * commission  # Solo costo de comisión para SHORT
+                if capital_available >= shel_cost + vlo_cost:
+                    # Ejecutar operación
+                    capital -= shel_cost  # Restar costo de LONG SHEL
+                    open_positions_with_details.append({
+                        'open_date': date,
+                        'signal': 1,
+                        'shel_shares': n_shares_shel,   # LONG SHEL
+                        'vlo_shares': -n_shares_vlo,    # SHORT VLO
+                        'shel_open_price': shel_price,
+                        'vlo_open_price': vlo_price,
+                        'shel_commission_open': n_shares_shel * shel_price * commission,
+                        'vlo_commission_open': n_shares_vlo * vlo_price * commission
+                    })
+                    trade_log.append({
+                        'Date': date,
+                        'Type': 'OPEN',
+                        'Signal': 1,
+                        'SHEL_Shares': n_shares_shel,
+                        'VLO_Shares': -n_shares_vlo,
+                        'SHEL_Price': shel_price,
+                        'VLO_Price': vlo_price,
+                        'P&L': 0,
+                        'Cumulative_P&L': cumulative_pnl,
+                        'Return (%)': (cumulative_pnl / capital_init) * 100,
+                        'Capital': capital
+                    })
+                else:
+                    print(f"No hay capital suficiente para abrir posición en {date}: Capital disponible = {capital_available:.2f}, Costo = {shel_cost + vlo_cost:.2f}")
+                    continue
 
-        portfolio_value.append(total_value)
+        else:  # Cierre
+            positions_to_close = []
+            for j, position in enumerate(open_positions_with_details):
+                # Calcular P&L
+                shel_shares = position['shel_shares']
+                vlo_shares = position['vlo_shares']
+                shel_open_price = position['shel_open_price']
+                vlo_open_price = position['vlo_open_price']
+                shel_commission_open = position['shel_commission_open']
+                vlo_commission_open = position['vlo_commission_open']
+                shel_commission_close = abs(shel_shares) * shel_price * commission
+                vlo_commission_close = abs(vlo_shares) * vlo_price * commission
 
-    portfolio_series = pd.Series(portfolio_value, index=data.index)
+                # P&L para SHEL
+                if shel_shares > 0:  # LONG SHEL
+                    shel_pnl = (shel_price - shel_open_price) * shel_shares - (shel_commission_open + shel_commission_close)
+                else:  # SHORT SHEL
+                    shel_pnl = (shel_open_price - shel_price) * abs(shel_shares) - (shel_commission_open + shel_commission_close)
 
-    # Calcular métricas de rendimiento
-    final_capital = portfolio_series.iloc[-1]
-    total_return = (final_capital - capital_init) / capital_init
-    portfolio_returns = portfolio_series.pct_change().fillna(0)
-    days = len(portfolio_series)
-    annualized_return = (1 + total_return) ** (252 / days) - 1 if days > 0 else 0
-    vol_annualized = portfolio_returns.std() * np.sqrt(252)
-    risk_free_rate = 0.02
-    excess_return = portfolio_returns - (risk_free_rate / 252)
-    sharpe_ratio = (excess_return.mean() / excess_return.std()) * np.sqrt(252) if excess_return.std() != 0 else 0
-    rolling_max = portfolio_series.cummax()
-    drawdown = (portfolio_series - rolling_max) / rolling_max
-    max_drawdown = drawdown.min()
+                # P&L para VLO
+                if vlo_shares > 0:  # LONG VLO
+                    vlo_pnl = (vlo_price - vlo_open_price) * vlo_shares - (vlo_commission_open + vlo_commission_close)
+                else:  # SHORT VLO
+                    vlo_pnl = (vlo_open_price - vlo_price) * abs(vlo_shares) - (vlo_commission_open + vlo_commission_close)
 
-    print("\n=== Strategy Performance Metrics ===")
-    print(f"Initial Capital      : ${capital_init:,.2f}")
-    print(f"Final Capital        : ${final_capital:,.2f}")
-    print(f"Total Return         : {total_return:.2%}")
-    print(f"Annualized Return    : {annualized_return:.2%}")
+                # Total P&L de la operación
+                total_pnl = shel_pnl + vlo_pnl
+                capital += total_pnl
+                cumulative_pnl += total_pnl
 
-    return portfolio_series, trades
+                trade_log.append({
+                    'Date': date,
+                    'Type': 'CLOSE',
+                    'Signal': signal,
+                    'SHEL_Shares': shel_shares,
+                    'VLO_Shares': vlo_shares,
+                    'SHEL_Price': shel_price,
+                    'VLO_Price': vlo_price,
+                    'P&L': total_pnl,
+                    'Cumulative_P&L': cumulative_pnl,
+                    'Return (%)': (cumulative_pnl / capital_init) * 100,
+                    'Capital': capital
+                })
+                positions_to_close.append(j)
+
+            # Eliminar posiciones cerradas
+            for j in sorted(positions_to_close, reverse=True):
+                open_positions_with_details.pop(j)
+
+        capital_history.append({'Date': date, 'Capital': capital})
+
+    # Convertir trade_log y capital_history a DataFrames
+    trade_log_df = pd.DataFrame(trade_log)
+    capital_history_df = pd.DataFrame(capital_history).set_index('Date')
+
+    return trade_log_df, capital_history_df
