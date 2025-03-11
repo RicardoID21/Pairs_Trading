@@ -23,11 +23,6 @@ def download_data(ticker: str, period: str = '10y'):
         return data['Close']
 
 
-def log_transform(series):
-    """Aplica la transformación logarítmica a la serie."""
-    return np.log(series)
-
-
 def run_adf_test(series, name: str):
     """Aplica el test ADF a la serie y muestra los resultados."""
     series = series.dropna()
@@ -70,7 +65,7 @@ def engle_granger_cointegration_test(series1, series2, name1="Serie1", name2="Se
     return p_value, adf_stat, model
 
 
-def plot_etfs(series1, series2, label1: str, label2: str, title="Comparación de activos (Precios Logarítmicos)"):
+def plot_etfs(series1, series2, label1: str, label2: str, title="Comparación de activos (Precios Ajustados)"):
     """Grafica dos series para comparar sus movimientos."""
     data = pd.concat([series1, series2], axis=1, join='inner')
     data.columns = [label1, label2]
@@ -79,7 +74,7 @@ def plot_etfs(series1, series2, label1: str, label2: str, title="Comparación de
     plt.plot(data.index, data[label2], label=label2)
     plt.title(title)
     plt.xlabel("Fecha")
-    plt.ylabel("Precio Logarítmico")
+    plt.ylabel("Precio Ajustado")
     plt.legend()
     plt.grid(True)
     plt.show()
@@ -132,8 +127,9 @@ class KalmanFilterReg:
         self.P = (np.eye(2) - K @ C) @ self.P
 
 
-def run_kalman_filter(log_x, log_y):
-    df = pd.concat([log_x, log_y], axis=1).dropna()
+def run_kalman_filter(x, y):
+    """Aplica el filtro de Kalman a las series de precios ajustados."""
+    df = pd.concat([x, y], axis=1).dropna()
     df.columns = ['x', 'y']
     kf = KalmanFilterReg()
     alphas = []
@@ -152,15 +148,15 @@ def run_kalman_filter(log_x, log_y):
     return out
 
 
-def generate_vecm_signals(log_data_shel, log_data_vlo, det_order=0, k_ar_diff=1, threshold_sigma=1.5):
+def generate_vecm_signals(data_shel, data_vlo, det_order=0, k_ar_diff=1, threshold_sigma=1.5):
     """
-    Ajusta un VECM a las series logarítmicas y genera señales de trading basadas en ±threshold_sigma * std(ECT).
+    Ajusta un VECM a las series de precios ajustados y genera señales de trading basadas en ±threshold_sigma * std(ECT).
     Retorna:
       - df_signals: DataFrame con columnas ['ECT', 'signal'] indexado por fecha.
       - vecm_res: Objeto del modelo VECM ajustado.
     """
-    df = pd.concat([log_data_shel, log_data_vlo], axis=1).dropna()
-    df.columns = ['SHEL_Log', 'VLO_Log']
+    df = pd.concat([data_shel, data_vlo], axis=1).dropna()
+    df.columns = ['SHEL', 'VLO']
     joh_res = coint_johansen(df, det_order, k_ar_diff)
     rank = 1
     model = VECM(df, deterministic='co', k_ar_diff=k_ar_diff, coint_rank=rank)
@@ -177,7 +173,7 @@ def generate_vecm_signals(log_data_shel, log_data_vlo, det_order=0, k_ar_diff=1,
     ect_values = []
     for i in range(len(df_shift)):
         row = df_shift.iloc[i]
-        val = beta_assets[0] * row['SHEL_Log'] + beta_assets[1] * row['VLO_Log'] + coint_const
+        val = beta_assets[0] * row['SHEL'] + beta_assets[1] * row['VLO'] + coint_const
         ect_values.append(val)
     ect_series = pd.Series(ect_values, index=df_shift.index, name='ECT')
     ect_mean = ect_series.mean()

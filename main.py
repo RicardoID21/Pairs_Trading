@@ -24,28 +24,24 @@ def main():
     data = pd.concat([data_shel, data_vlo], axis=1).dropna()
     data.columns = ['SHEL', 'VLO']
 
-    # 2. Transformación logarítmica (para análisis de cointegración)
-    log_data_shel = np.log(data['SHEL'])
-    log_data_vlo = np.log(data['VLO'])
+    # 2. Ejecutar pruebas básicas
+    print("\nPrueba ADF para SHEL:")
+    run_adf_test(data_shel, "SHEL")
+    print("\nPrueba ADF para VLO:")
+    run_adf_test(data_vlo, "VLO")
+    print("\nCorrelación entre SHEL y VLO:",
+          correlation_analysis(data_shel, data_vlo, "SHEL", "VLO"))
+    engle_granger_cointegration_test(data_shel, data_vlo, name1="SHEL", name2="VLO")
+    johansen_cointegration_test(pd.concat([data_shel, data_vlo], axis=1).dropna(), det_order=0, k_ar_diff=1)
 
-    # 3. Ejecutar pruebas básicas
-    print("\nPrueba ADF para SHEL (log):")
-    run_adf_test(log_data_shel, "SHEL Log")
-    print("\nPrueba ADF para VLO (log):")
-    run_adf_test(log_data_vlo, "VLO Log")
-    print("\nCorrelación entre SHEL y VLO (log):",
-          correlation_analysis(log_data_shel, log_data_vlo, "SHEL Log", "VLO Log"))
-    engle_granger_cointegration_test(log_data_shel, log_data_vlo, name1="SHEL_Log", name2="VLO_Log")
-    johansen_cointegration_test(pd.concat([log_data_shel, log_data_vlo], axis=1).dropna(), det_order=0, k_ar_diff=1)
+    # 3. Normalizar para graficar
+    norm_shel = (data_shel - data_shel.min()) / (data_shel.max() - data_shel.min()) * 100
+    norm_vlo = (data_vlo - data_vlo.min()) / (data_vlo.max() - data_vlo.min()) * 100
 
-    # 4. Normalizar para graficar
-    norm_shel = (log_data_shel - log_data_shel.min()) / (log_data_shel.max() - log_data_shel.min()) * 100
-    norm_vlo = (log_data_vlo - log_data_vlo.min()) / (log_data_vlo.max() - log_data_vlo.min()) * 100
-
-    # 5. Calcular el spread (Johansen)
-    combined_log = pd.concat([log_data_shel, log_data_vlo], axis=1, join='inner').sort_index()
-    combined_log.columns = ["SHEL_Log", "VLO_Log"]
-    spread_johansen = 7.98728502 * combined_log["SHEL_Log"] - 4.9034967 * combined_log["VLO_Log"]
+    # 4. Calcular el spread (Johansen)
+    combined = pd.concat([data_shel, data_vlo], axis=1, join='inner').sort_index()
+    combined.columns = ["SHEL", "VLO"]
+    spread_johansen = 0.19432877 * combined["SHEL"] - 0.06835929 * combined["VLO"]
     spread_centered = spread_johansen - spread_johansen.mean()
 
     spread_std = spread_centered.std()
@@ -56,8 +52,8 @@ def main():
     short_shel_long_vlo = spread_df[spread_df['spread'] > threshold_up]
     short_vlo_long_shel = spread_df[spread_df['spread'] < threshold_down]
 
-    print("\n--- Regresión OLS: SHEL_Log ~ VLO_Log ---")
-    ols_regression_and_plot(log_data_shel, log_data_vlo, dep_label="SHEL_Log", indep_label="VLO_Log")
+    print("\n--- Regresión OLS: SHEL ~ VLO ---")
+    ols_regression_and_plot(data_shel, data_vlo, dep_label="SHEL", indep_label="VLO")
 
     norm_df = pd.concat([norm_shel, norm_vlo], axis=1, join='inner').sort_index()
     norm_df.columns = ['SHEL_Norm', 'VLO_Norm']
@@ -93,23 +89,23 @@ def main():
     plt.tight_layout()
     plt.show()
 
-    # 6. Kalman Filter
-    kalman_df = run_kalman_filter(log_data_shel, log_data_vlo)
+    # 5. Kalman Filter
+    kalman_df = run_kalman_filter(data_shel, data_vlo)
 
-    df_compare = pd.concat([log_data_vlo, kalman_df['pred_y']], axis=1).dropna()
-    df_compare.columns = ['VLO_log', 'pred_y']
+    df_compare = pd.concat([data_vlo, kalman_df['pred_y']], axis=1).dropna()
+    df_compare.columns = ['VLO', 'pred_y']
     plt.figure(figsize=(12, 6))
-    plt.plot(df_compare.index, df_compare['VLO_log'], label='VLO (log)', color='yellow')
+    plt.plot(df_compare.index, df_compare['VLO'], label='VLO', color='yellow')
     plt.plot(df_compare.index, df_compare['pred_y'], label='Predicción Kalman', color='red', alpha=0.7)
     plt.title("Kalman Filter: Comparación Y real vs. Y predicha")
     plt.xlabel("Fecha")
-    plt.ylabel("Log(Precio)")
+    plt.ylabel("Precio")
     plt.legend()
     plt.grid(True)
     plt.show()
 
-    # 7. Generar señales VECM y ejecutar backtest de la estrategia
-    df_signals, vecm_res = generate_vecm_signals(log_data_shel, log_data_vlo)
+    # 6. Generar señales VECM y ejecutar backtest de la estrategia
+    df_signals, vecm_res = generate_vecm_signals(data_shel, data_vlo)
     print("Señales generadas:")
     print(df_signals.head(10))
 
